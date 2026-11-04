@@ -1030,6 +1030,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
         snprintf(p, sizeof p, "%s/RomFS", g_root); setenv("DM_ROMFS", p, 1);
         snprintf(p, sizeof p, "%s/shaders.dmsv", g_root); setenv("DM_VK_SHADERS", p, 1);
         if (getenv("DM_AOC_DIR")) { snprintf(p, sizeof p, "%s/aoc", g_root); setenv("DM_AOC_DIR", p, 1); }
+        if (getenv("DM_SHARED_FONT_EXT")) { snprintf(p, sizeof p, "%s/nintendo_ext.ttf", g_root); setenv("DM_SHARED_FONT_EXT", p, 1); }
         setenv("DM_SAVE", library_save, 1);
     }
 #ifdef DM_RELEASE
