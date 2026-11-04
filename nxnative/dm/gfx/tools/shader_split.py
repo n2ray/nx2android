@@ -1418,6 +1418,13 @@ def nso_image(path):
         img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
     return bytes(img)
 
+def scan_jobs(groups, common, trees, zdicts, workers):
+    if os.environ.get('DM_SHADER_SERIAL') == '1':
+        _pool_init(common, trees, zdicts)
+        return [result for group, _ in groups for result in map(scan_file, group)]
+    with cf.ProcessPoolExecutor(workers, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex:
+        return [result for group, size in groups for result in ex.map(scan_file, group, chunksize=size)]
+
 def main():
     romfs_l, main_l, pkg, mapout, factsout = sys.argv[1:6]
     pairsout = sys.argv[6] if len(sys.argv) > 6 else None
@@ -1469,8 +1476,7 @@ def main():
     ar_jobs, ards = ard_jobs(files)   # Xenoblade Chronicles 3's archive (bf3.arh / bf3.ard)
     big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ar_jobs
     files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in ards]
-    with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {}, zdicts)) as ex:
-        results += list(ex.map(scan_file, big)) + list(ex.map(scan_file, files, chunksize=16))
+    results += scan_jobs(((big, 1), (files, 16)), common, {}, zdicts, J)
     trees, defer = {}, []
     for rel, uniq, pr, extra in results:
         if extra == 'defer': defer.append(rel)
@@ -1480,7 +1486,7 @@ def main():
         import unityfs
         for k in unityfs.KNOWN_TREES: trees.setdefault(k, unityfs.known_tree(*k))
         byrel = {r: p for p, r in files}
-        with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, trees, zdicts)) as ex: again = list(ex.map(scan_file, [(byrel[r], r) for r in defer]))
+        again = scan_jobs((([(byrel[r], r) for r in defer], 1),), common, trees, zdicts, J)
         for rel, uniq, pr, extra in again:
             if extra == 'defer': red(f'{rel}: Unity serialized file without type trees, and no bundle has a Shader type tree of the same hash to borrow')
         results = [r for r in results if r[3] != 'defer'] + again

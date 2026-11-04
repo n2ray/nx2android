@@ -16,6 +16,7 @@
     <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
     <DisableUnsupportedError>true</DisableUnsupportedError>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
     <SelfContained>true</SelfContained>
     <StripSymbols>true</StripSymbols>

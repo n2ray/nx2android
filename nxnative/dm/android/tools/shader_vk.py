@@ -23,7 +23,10 @@ ap.add_argument('--keys', default='')
 ap.add_argument('--dotnet', default=os.environ.get('DOTNET', 'dotnet'))
 ap.add_argument('--capture', help='a folder of shaders captured at run time on the device (<key>.bin)')
 ap.add_argument('--xlate', help="the translator (dmsh_xlate.dll) to run (default: the iOS chain's dm/gfx/tools/dmsh_xlate_bin; the porter builds one from the in-repo source)")
+ap.add_argument('--xlate-native', help='Android NativeAOT translator executable (instead of dotnet and --xlate)')
 a = ap.parse_args()
+if a.xlate and a.xlate_native: ap.error('--xlate and --xlate-native cannot be used together')
+if a.jobs < 1: ap.error('--jobs must be positive')
 
 GAME = dmsh_chain.load_game()
 FACTS = dmsh_facts.load()
@@ -248,6 +251,9 @@ def refl_bin(binds, c1, local):
                                reg, samp, e.get('fmt') or 0, off, sarg))
     return b''.join(out) + bytes(c1)
 
+def translator_command(dotnet, dll, native, jobs, out):
+    return [native, jobs, out] if native else [dotnet, dll, jobs, out]
+
 def main():
     pc, loc = {}, {}
     for ln in open(MAP, encoding='utf-8'):
@@ -269,13 +275,15 @@ def main():
     chunks = [keys[i::a.jobs] for i in range(a.jobs) if keys[i::a.jobs]]
     def xl(ch):
         jp = os.path.join(w, f'job_{abs(hash(ch[0]))}.json'); json.dump([jobs[k] for k in ch], open(jp, 'w'))
-        return subprocess.run([a.dotnet, XLATE_DLL, jp, w], capture_output=True, text=True, errors='replace')
+        return subprocess.run(translator_command(a.dotnet, XLATE_DLL, a.xlate_native, jp, w), capture_output=True, text=True, errors='replace')
     print(f'translating {len(keys)} shaders in {len(chunks)} batches ...', flush=True)
     with cf.ThreadPoolExecutor(len(chunks)) as ex: rs = list(ex.map(xl, chunks))
     errs = collections.Counter()
     for r in rs:
         for ln in r.stderr.splitlines():
             if ln.strip(): errs[ln.strip()[:120]] += 1
+    if any(r.returncode for r in rs):
+        raise RuntimeError('shader translator failed: ' + '; '.join(errs or ['no diagnostic output']))
     entries, fails = [], collections.Counter()
     for k in keys:
         spv_p, res_p = os.path.join(w, k + '.spv'), os.path.join(w, k + '.res.json')
@@ -288,6 +296,7 @@ def main():
         # header words 2-4: a compute shader's local size; a vertex shader's input locations (all, signed int, unsigned int); a pixel shader's output locations
         hdr3 = (local or jobs[k].get('local') or [1, 1, 1]) if st == 'cs' else io[1] if st == 'vs' else io[3] if st == 'ps' else [0, 0, 0]
         entries.append((int(k, 16), STAGES.get(st, 0), spv, refl_bin(cl, c1s[k], hdr3)))
+    if fails: raise RuntimeError(f'shader translation incomplete: {dict(fails)}')
     entries.sort(key=lambda e: e[0])
     hdr = struct.pack('<4sII', b'DMSV', 1, len(entries)); ent_sz = 32
     off = len(hdr) + ent_sz * len(entries); table, blobs = [], []

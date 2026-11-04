@@ -231,10 +231,19 @@ class Pak:
         the game's own decoder in the Mac host (shader_split.py oodle); Octopath Traveler 0's archives go through the Oodle job instead"""
         e = self.entry(path)
         if not e['method']: return self.read_at(e['off'] + 53, e['size'], e['encrypted'])
-        if not decode: raise ValueError(f'{path} is {e["method"]}-compressed in the pak')
+        if not decode and e['method'] != 'Zlib': raise ValueError(f'{path} is {e["method"]}-compressed in the pak')
         out, left = [], e['raw']
         for s, n in e['blocks']:
-            k = min(left, e['block_size']); out.append(decode(self.read_at(e['off'] + s, n, e['encrypted']), k)); left -= k
+            k = min(left, e['block_size']); block = self.read_at(e['off'] + s, n, e['encrypted'])
+            if e['method'] == 'Zlib':
+                import zlib
+                dec = zlib.decompressobj(); data = dec.decompress(block, k + 1)
+                if len(data) != k or not dec.eof or dec.unused_data or dec.unconsumed_tail: raise ValueError(f'{path}: invalid zlib block')
+            else:
+                if not decode: raise ValueError(f'{path} is {e["method"]}-compressed in the pak')
+                data = decode(block, k)
+            out.append(data); left -= k
+        if left: raise ValueError(f'{path}: incomplete compressed file')
         return b''.join(out)
 
 def archive(b):
