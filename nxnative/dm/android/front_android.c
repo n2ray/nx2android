@@ -10,6 +10,7 @@
 #include "dm_input.h"
 #include "overlay_layout.h"
 #include "saves_android.h"
+#include "library_paths.h"
 #include <math.h>
 #include <time.h>
 #include <android/asset_manager.h>
@@ -981,17 +982,56 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     act->callbacks->onPause = on_pause; act->callbacks->onResume = on_resume; act->callbacks->onWindowFocusChanged = on_window_focus; act->callbacks->onDestroy = on_destroy;
     ANativeActivity_setWindowFlags(act, AWINDOW_FLAG_KEEP_SCREEN_ON | AWINDOW_FLAG_FULLSCREEN, 0);
     static int started; if (started++) return;   // a second onCreate (configuration change) keeps the running game
-    snprintf(g_root, sizeof g_root, "%s", act->externalDataPath ? act->externalDataPath : act->internalDataPath);
-    char p[700];
+    const char *external = act->externalDataPath ? act->externalDataPath : act->internalDataPath;
+    snprintf(g_root, sizeof g_root, "%s", external);
+    char p[700], library_save[700] = "";
+    snprintf(p, sizeof p, "%s/library-selection.txt", act->internalDataPath);
+    FILE *selection = fopen(p, "r");
+    if (!selection && errno != ENOENT) {
+        __android_log_print(ANDROID_LOG_ERROR, "dmhost", "cannot read library selection");
+        return;
+    }
+    if (selection) {
+        char id[32];
+        int ok = fgets(id, sizeof id, selection) && (strcspn(id, "\r\n") < sizeof id - 1 || feof(selection));
+        fclose(selection);
+        if (ok) id[strcspn(id, "\r\n")] = 0;
+        if (!ok || !dm_library_paths(id, DM_GAME_PROGRAM_ID, external, act->internalDataPath,
+                                     g_root, sizeof g_root, library_save, sizeof library_save)) {
+            __android_log_print(ANDROID_LOG_ERROR, "dmhost", "invalid or incompatible library selection");
+            return;
+        }
+        struct stat st;
+        if (stat(g_root, &st) || !S_ISDIR(st.st_mode)) {
+            __android_log_print(ANDROID_LOG_ERROR, "dmhost", "selected game directory is missing");
+            return;
+        }
+        snprintf(p, sizeof p, "%s/saves", act->internalDataPath);
+        if ((mkdir(p, 0700) && errno != EEXIST) || (mkdir(library_save, 0700) && errno != EEXIST)) {
+            __android_log_print(ANDROID_LOG_ERROR, "dmhost", "cannot create isolated save directory");
+            return;
+        }
+        if (stat(library_save, &st) || !S_ISDIR(st.st_mode)) {
+            __android_log_print(ANDROID_LOG_ERROR, "dmhost", "isolated save path is not a directory");
+            return;
+        }
+    }
     snprintf(p, sizeof p, "%s/log.txt", g_root); char prev[720]; snprintf(prev, sizeof prev, "%s/log.prev.txt", g_root); rename(p, prev);
     if (!freopen(p, "w", stderr)) __android_log_print(ANDROID_LOG_ERROR, "dmhost", "cannot write %s", p);
     setvbuf(stderr, NULL, _IOLBF, 0);
     setenv("DM_ROOT", g_root, 1);
     snprintf(p, sizeof p, "%s/RomFS", g_root); setenv("DM_ROMFS", p, 0);
-    snprintf(p, sizeof p, "%s/save", act->internalDataPath); mkdir(p, 0700); setenv("DM_SAVE", p, 0);
+    if (!library_save[0]) { snprintf(p, sizeof p, "%s/save", act->internalDataPath); mkdir(p, 0700); setenv("DM_SAVE", p, 0); }
     snprintf(p, sizeof p, "%s/temp", act->internalDataPath); mkdir(p, 0700); setenv("DM_TEMP", p, 0);
     snprintf(p, sizeof p, "%s/shaders.dmsv", g_root); setenv("DM_VK_SHADERS", p, 0);
     snprintf(p, sizeof p, "%s/env.txt", g_root); env_file(p);
+    if (library_save[0]) {
+        setenv("DM_ROOT", g_root, 1);
+        snprintf(p, sizeof p, "%s/RomFS", g_root); setenv("DM_ROMFS", p, 1);
+        snprintf(p, sizeof p, "%s/shaders.dmsv", g_root); setenv("DM_VK_SHADERS", p, 1);
+        if (getenv("DM_AOC_DIR")) { snprintf(p, sizeof p, "%s/aoc", g_root); setenv("DM_AOC_DIR", p, 1); }
+        setenv("DM_SAVE", library_save, 1);
+    }
 #ifdef DM_RELEASE
     unsetenv("DM_CTL");   // a release build takes no remote key presses (the control file is a development tool)
 #endif
