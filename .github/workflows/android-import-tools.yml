@@ -1,0 +1,37 @@
+name: Experimental Android import tools
+on:
+  push:
+    branches: [experiment/unified-library]
+    paths:
+      - '.github/workflows/android-import-tools.yml'
+      - 'nxnative/dm/android/extract_aot/**'
+      - 'nxnative/dm/android/xlate_aot/**'
+      - 'nxnative/dm/tools/nx_extract/**'
+      - 'nxnative/dm/gfx/tools/dmsh_xlate/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-aot:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Android NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.3.13750724' > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+      - name: Build extractor
+        run: OUT="$RUNNER_TEMP/nx2a-extract" bash nxnative/dm/android/extract_aot/build.sh
+      - name: Build shader translator
+        run: OUT="$RUNNER_TEMP/nx2a-xlate" bash nxnative/dm/android/xlate_aot/build.sh
+      - name: Upload tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: nx2a-android-import-tools
+          path: |
+            ${{ runner.temp }}/nx2a-extract/nx_extract
+            ${{ runner.temp }}/nx2a-xlate/dmsh_xlate
+          if-no-files-found: error

@@ -1,0 +1,25 @@
+<!-- Android NativeAOT build of this repository's LibHac extractor.
+     Adapted from Galar-Native-Android (MIT), commit 884e6d9fd338f81d4c88c54d596a3814a2e7d4e0. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>nx_extract</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RuntimeIdentifier>linux-bionic-arm64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
+    <DisableUnsupportedError>true</DisableUnsupportedError>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <SelfContained>true</SelfContained>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../../tools/nx_extract/Program.cs" />
+    <PackageReference Include="LibHac" Version="0.19.0" />
+    <LinkerArg Include="-Wl,-z,max-page-size=16384" />
+  </ItemGroup>
+</Project>

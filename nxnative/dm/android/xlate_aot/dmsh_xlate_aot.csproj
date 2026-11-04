@@ -1,0 +1,31 @@
+<!-- Android NativeAOT build of this repository's shader translator.
+     Adapted from Galar-Native-Android (MIT), commit 884e6d9fd338f81d4c88c54d596a3814a2e7d4e0. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>dmsh_xlate</AssemblyName>
+    <RootNamespace>dmsh_xlate</RootNamespace>
+    <XlateSrc>$(MSBuildThisFileDirectory)../../gfx/tools/dmsh_xlate</XlateSrc>
+    <RyuSrc>$(MSBuildThisFileDirectory)../../third_party/ryujinx</RyuSrc>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RuntimeIdentifier>linux-bionic-arm64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
+    <DisableUnsupportedError>true</DisableUnsupportedError>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <SelfContained>true</SelfContained>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(XlateSrc)/Program.cs" />
+    <EmbeddedResource Include="$(XlateSrc)/Program.cs" LogicalName="src0" />
+    <EmbeddedResource Include="$(XlateSrc)/dmsh_xlate.csproj" LogicalName="src1" />
+    <ProjectReference Include="$(RyuSrc)/src/Ryujinx.Graphics.Shader/Ryujinx.Graphics.Shader.csproj" />
+    <ProjectReference Include="$(RyuSrc)/src/Ryujinx.Common/Ryujinx.Common.csproj" />
+    <LinkerArg Include="-Wl,-z,max-page-size=16384" />
+  </ItemGroup>
+</Project>

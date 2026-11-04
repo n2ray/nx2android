@@ -13,6 +13,7 @@
 # Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF; when that would start beyond 112 MB the patch area sits before the base, see FAR), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.obs.tsv
 import struct, re, sys, os, glob, types, importlib.util
 from itertools import combinations
+from functools import lru_cache
 import lz4.block
 from capstone import *
 from capstone.arm64 import ARM64_OP_IMM, ARM64_OP_MEM, ARM64_OP_REG
@@ -926,10 +927,9 @@ SPIN_PATHS, SPIN_STEPS = 256, 4096   # complete paths back to T; search steps (R
 SPIN_LSE = ('ldadd', 'ldclr', 'ldeor', 'ldset', 'ldsmax', 'ldsmin', 'ldumax', 'ldumin')
 SPIN_BAD = {'bl', 'blr', 'br', 'ret', 'eret', 'svc', 'hvc', 'smc', 'brk', 'hlt', 'udf', 'mrs', 'msr', 'sys', 'sysl', 'wfe', 'wfi', 'sev', 'sevl', 'clrex', 'dc', 'ic', 'at',
             'tlbi', 'drps', 'dcps1', 'dcps2', 'dcps3', 'blraa', 'blrab', 'blraaz', 'blrabz', 'braa', 'brab', 'braaz', 'brabz', 'retaa', 'retab', 'eretaa', 'eretab'}
-spin_dec = {}
+@lru_cache(maxsize=32768)
 def spin_ins(a):
-    if a not in spin_dec: spin_dec[a] = next(md.disasm(bytes(IMG[a:a + 4]), a), None)
-    return spin_dec[a]
+    return next(md.disasm(bytes(IMG[a:a + 4]), a), None)
 def spin_norm(n):
     n = {'fp': 'x29', 'lr': 'x30', 'wsp': 'sp'}.get(n, n)
     if n in ('wzr', 'xzr'): return None
