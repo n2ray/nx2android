@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using LibHac.Common;
 using LibHac.Common.Keys;
@@ -32,9 +33,10 @@ static class P {
         KeySet ks = ExternalKeyReader.ReadKeyFile(a[0]);
         if (a[1] == "--aoc") return Aoc(ks, a[2], a[3]);
         var basePkg = OpenNsp(ks, a[1]); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2]);
-        Nca baseProg = Pick(basePkg, NcaContentType.Program) ?? throw new Exception("no Program NCA in the base NSP");
-        Nca updProg = updPkg == null ? null : Pick(updPkg, NcaContentType.Program, baseProg.Header.TitleId) ?? throw new Exception("no Program NCA of the base game's program in the update NSP");
-        Nca ctrl = Pick(updPkg ?? basePkg, NcaContentType.Control, baseProg.Header.TitleId);
+        Nca baseProg = PickProgram(basePkg, null, false) ?? throw new Exception("no base Program NCA in the base file");
+        Nca updProg = updPkg == null ? PickProgram(basePkg, baseProg.Header.TitleId, true) :
+            PickProgram(updPkg, baseProg.Header.TitleId, true) ?? throw new Exception("no update Program NCA of the base game's program in the update file");
+        Nca ctrl = PickControl(basePkg, updPkg, baseProg.Header.TitleId);
         Console.WriteLine($"title {baseProg.Header.TitleId:x16}" + (updProg != null ? $", update {updProg.Header.TitleId:x16}" : ""));
         string outDir = a[3], cmpDir = a.Length > 4 ? a[4] : null;
         if (ctrl != null) {   // control data (NACP): display version and game name; a raw copy goes to <output dir>/control.nacp for naming the app
@@ -123,6 +125,21 @@ static class P {
         Nca r = null;
         foreach (Nca n in l) if (n.Header.ContentType == t && (id == null ? r == null || n.Header.TitleId < r.Header.TitleId : n.Header.TitleId == id)) r = n;
         return r;
+    }
+    static bool IsPatch(Nca n) { try { return n.Header.GetFsHeader(1).IsPatchSection(); } catch { return false; } }
+    static Nca PickProgram(List<Nca> entries, ulong? id, bool patch) {
+        return ProgramChoice.Pick(entries.FindAll(n => n.Header.ContentType == NcaContentType.Program), n => n.Header.TitleId, IsPatch, id, patch);
+    }
+    static Nca PickControl(List<Nca> basePkg, List<Nca> updPkg, ulong id) {
+        Nca best = null; Version bestVersion = null;
+        foreach (Nca n in basePkg.Concat(updPkg ?? new List<Nca>())) {
+            if (n.Header.ContentType != NcaContentType.Control || n.Header.TitleId != id) continue;
+            byte[] data = Nacp(n);
+            string text = System.Text.Encoding.ASCII.GetString(data, 0x3060, 0x10).TrimEnd('\0');
+            Version version = Version.TryParse(text, out var parsed) ? parsed : new Version(0, 0);
+            if (best == null || version > bestVersion) { best = n; bestVersion = version; }
+        }
+        return best;
     }
 
     // Icon: the control data holds one 256x256 JPEG per language (/icon_<language>.dat). Use the English one (American, then British); if neither exists, take the first in NACP language order

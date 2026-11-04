@@ -8,6 +8,7 @@ on:
       - 'nxnative/dm/android/xlate_aot/**'
       - 'nxnative/dm/tools/nx_extract/**'
       - 'nxnative/dm/gfx/tools/dmsh_xlate/**'
+      - 'tests/program_choice/**'
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,6 +20,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Test program selection
+        run: dotnet run --project tests/program_choice/ProgramChoiceTest.csproj
       - name: Install Android NDK
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.3.13750724' > /dev/null
