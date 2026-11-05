@@ -412,10 +412,18 @@ def job(romfs, main_nso, work, decode=None):
     tocs = io_shader_tocs(romfs)
     if tocs and not decode: raise ValueError(f'{tocs[0]}: IoStore shader libraries need the game\'s decoder (decode)')
     names = archive_names(romfs)
+    used = set()
+    def unique_name(name):
+        candidate, i = name, 1
+        while candidate in used:
+            candidate = f'{i}_{name}'
+            i += 1
+        used.add(candidate)
+        return candidate
     for tp in tocs:
         t = Toc(tp)
         for i in t.of_type(IO_SHADER_LIBRARY):
-            name = io_library_name(t, i, names) + '.ushaderbytecode'; b = io_archive(t, i, decode)
+            name = unique_name(io_library_name(t, i, names) + '.ushaderbytecode'); b = io_archive(t, i, decode)
             open(os.path.join(work, 'archives', name), 'wb').write(b)
             listing.append(dict(name=name, pak=os.path.relpath(tp, romfs), path=f'chunk {t.ids[i].hex()}', shaders=len(archive(b)['shaders']), compressed=0, compression='IoStore, decoded'))
     for pak in unreal_paks(romfs, legacy=False):
@@ -425,7 +433,7 @@ def job(romfs, main_nso, work, decode=None):
             if key is None: raise ValueError(f'{pak}: the index is encrypted and no window of main decrypts it')
         p = Pak(pak, key)
         for path in sorted(x for x in p.files if x.endswith('.ushaderbytecode')):
-            b = p.read(path); a = archive(b); name = os.path.basename(path)
+            b = p.read(path); a = archive(b); name = unique_name(os.path.basename(path))
             comp = [i for i, (_, size, raw, _) in enumerate(a['shaders']) if size != raw]
             raws = lz4_shaders(b, a)
             if comp and raws: b = decoded_archive(b, raws); comp, how = [], 'LZ4'   # decoded here: the Oodle job gets none of them

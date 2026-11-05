@@ -194,6 +194,7 @@ class Port:
             self.extract()
         finally: self.drop_unpacked()   # a failed run leaves no decompressed dumps behind either
         self.check_graphics()
+        if self.ue_decode: self.decode_ue_shaders()
         self.fps_unlock()
         self.rewrite()
         if o.install: self.pull_captures()
@@ -389,6 +390,7 @@ class Port:
         src = profile_guess.build_sources(self.game / 'ExeFS', self.game / 'RomFS', self.g.words('modules'))
         gfx = src['graphics'][0]
         if gfx != 'nvn': raise BuildError(f'{self.app_name} renders with {gfx} ({src["graphics"][1]}): the Android host replays NVN only so far')
+        self.ue_decode = src['ue_decode'][0]
         # Game Freak's GFPAKs and Trinity packs with Oodle entries: decoded by the game's own decoder on the Android device (device_oodle); PKZ packs still need the Mac host
         self.oodle_why = src['oodle_packs'][1] if src['oodle_packs'][0] and ('GFPAK' in src['oodle_packs'][1] or 'Trinity' in src['oodle_packs'][1]) else ''
         if self.oodle_why:
@@ -398,8 +400,31 @@ class Port:
             try: Adb(self.tools['adb'], self.o.device or self.cfg.get('device'), log=say).pick()
             except (AdbError, KeyError) as e: raise BuildError(f"{self.app_name}'s shaders are in Oodle-compressed archives ({self.oodle_why}): the port decodes them with the game's own decoder on "
                                                                f'the Android device, so connect it (adb) and port again ({e})') from e
-        for k in ('glslc_capture', 'ue_decode', 'ue_legacy') + (() if self.oodle_why else ('oodle_packs',)):
+        for k in ('glslc_capture', 'ue_legacy') + (() if self.oodle_why else ('oodle_packs',)):
             if src[k][0]: raise BuildError(f'{self.app_name} needs a step that boots the game in the Mac host ({src[k][1]}), which the Android port cannot run yet')
+
+    def decode_ue_shaders(self):
+        import sys
+        sys.path.insert(0, str(NXNATIVE / 'dm/gfx/tools'))
+        import uepak
+        PROG.add(1); PROG.stage('Unreal shader archives')
+        for version in self.versions:
+            d = self.dirs[version]
+            job = self.work / 'tmp' / f'ue_{version}'
+            out = d / 'ue_shaders.partial'
+            nsp.rmtree(job); nsp.rmtree(out)
+            try:
+                listing, compressed = uepak.job(str(d / 'RomFS'), str(d / 'ExeFS/main'), str(job))
+                if not listing: raise BuildError(f'{version}: no Unreal shader archives found')
+                if compressed: raise BuildError(f'{version}: {compressed} Unreal shaders require the game Oodle decoder, which is not supported on Android yet')
+                uepak.finish(str(job), str(out))
+                nsp.swap_in(out, d / 'ue_shaders')
+                say(f'{version}: extracted {len(listing)} Unreal shader archives')
+            except (ValueError, OSError) as e:
+                raise BuildError(f'{version}: Unreal shader extraction failed: {e}') from e
+            finally:
+                nsp.rmtree(job); nsp.rmtree(out)
+        PROG.end('decoded')
 
     # ---- the game's own Oodle decoder on the device, for the shader split (Pokémon Legends: Arceus's GFPAKs, Pokémon Legends: Z-A's Trinity packs) ----
     ODEV = '/data/local/tmp/nx2a-oodle'   # dmhost, the rewritten modules and the job, removed afterwards

@@ -1,0 +1,13 @@
+# Sifu on Android: early playable report; wider scene and device coverage is pending.
+status	experimental
+tested	v327680 Xiaomi 15 Ultra (Snapdragon 8 Elite, Adreno 830, Turnip)
+package	org.nx2a.sifu
+orientation	landscape
+setting	docked=0
+setting	overlay=1
+setting	rumble=1
+env	DM_NVN_ASYNC=1
+env	DM_VK_SETSPLIT=1
+env	DM_VK_PASS_SPLIT=512
+env	DM_VK_OCCLUSION=1
+env	DM_VK_X_FENCES=1
