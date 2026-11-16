@@ -878,6 +878,34 @@ def adrp_targets(d, lo, hi):
                 break
     return out
 
+CIVBSF = b'CIVBSF\0\0'
+def civbsf_shaders(d, label):
+    """Firaxis's shader file (Civilization VII 1.5.0.1: ShaderAutoGen_Linux_NVN_FinalRelease.bs at the RomFS root, 801 shaders, 481 keys): 'CIVBSF\\0\\0', u32 version (0x1218), u32 the
+    file's length, then tables whose counts start at +0x68, the shader count first. Each shader is a record {00 ff 00 ff, u32 code length, u32 stored control length, u32 flags}, then its code
+    area, then its control section, unaligned, after the entry's name (and, for some, a pragma list from the engine's other platforms). The stored control length runs past the section's own
+    length (+0x20) in 15 of the 801, by 0x80 to 0xa00 bytes. The records are found from their control sections: each names its code length (+0x704), so the code area is the bytes right before
+    it and the record header right before that, whose two lengths must agree; every record must start after the previous one ends, and their number must be the header's shader count. The
+    tables that combine vertex and pixel shaders are not read, so the shaders are single-stage programs (separable_pairs)"""
+    n, size = field(d, '<I', 0x68, f'{label} CIVBSF header')[0], field(d, '<I', 0xc, f'{label} CIVBSF header')[0]
+    if size != len(d): red(f'{label} CIVBSF: the header names a length of {size:#x}, the file has {len(d):#x} bytes')
+    out, end, c = [], 0x90, d.find(CTL_MAGIC, 0x90)
+    while c >= 0:
+        own, ncode = field(d, '<I', c + 0x20, f'{label} CIVBSF control section @{c:#x}')[0], field(d, '<I', c + 0x704, f'{label} CIVBSF control section @{c:#x}')[0]
+        a = c - ncode; h = a - 16
+        if h < end: red(f'{label} CIVBSF control section @{c:#x}: its code area ({ncode:#x} bytes) and record header do not fit after the previous record, which ends at {end:#x}')
+        hcode, hctl = struct.unpack_from('<II', d, h + 4)
+        if hcode != ncode or hctl < own: red(f'{label} CIVBSF record @{h:#x}: code length {hcode:#x} and stored control length {hctl:#x}, its control section names {ncode:#x} and {own:#x}')
+        span(d, c, hctl, f'{label} CIVBSF record @{h:#x}: the stored control section')
+        ctl, code = d[c:c + own], d[a:c]
+        st = 'cs' if code[:4] == CS_MAGIC else sph_stage(code) if code[:4] == GFX_MAGIC else None
+        why = check(label, st, ctl, code) if st else 'no code area header before the control section'
+        if why: red(f'{label} CIVBSF record @{h:#x}: {why}')
+        out.append((f'{label}#CIVBSF@{a:#x}', st, ctl, code))
+        end = c + hctl; c = d.find(CTL_MAGIC, end)
+    if len(out) != n: red(f'{label} CIVBSF: the header names {n} shaders, {len(out)} records found')
+    return out
+
+
 def raw_shaders(d, label, known=()):
     """Control sections in main that are in no GLSLC output and no BNSH file: a shader compiled offline whose control section and code area the code hands to nvnShaderData itself (Advance Wars 1+2:
     Re-Boot Camp, Unity 2020.2 with Bink 2: the movie player's 32: 2 vertex, 22 pixel and 8 compute shaders; without them its movies drew white). Most are 0x20-byte records in data {code area
@@ -1413,7 +1441,7 @@ def ps_inputs(code):
     """Generic attributes a pixel shader reads: SPH words 6–13 are the input map, 8 bits for each of the 32 attributes (Ryujinx ShaderHeader.ImapTypes), non-zero = read; the translated MSL inputs are exactly user(locn<attribute>)"""
     return {i for i in range(32) if struct.unpack_from('<I', code, 0x30 + 4 * (6 + (i >> 2)))[0] >> ((i & 3) * 8) & 0xff}
 
-SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
+SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#CIVBSF@')   # sources whose every shader is a program of one stage
 # MonoGame's effects, whose passes may name no vertex shader and keep the one bound (Celeste: 10 of its 13 effects draw through SpriteBatch's vertex shader, which is in main); Next Level Games'
 # archives (Luigi's Mansion 3 makes 5,317 programs of one stage each at boot); PlatinumGames' shader objects (Bayonetta 3: one stage each, pg_shader); and control sections loose in main
 # (Advance Wars 1+2: Re-Boot Camp's Bink shaders, raw_shaders), which no file pairs
@@ -1681,6 +1709,9 @@ def scan_file(args):
         for nm, m in gfpak_members(open(path, 'rb').read(), '/' + rel): scan_blob(m, f'/{rel}{nm}', found)
         return rel, uniq_keys(found), var_pairs(found), trees
     d = unzs(path) if head[:4] == ZSTD_MAGIC else open(path, 'rb').read()   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
+    if d[:8] == CIVBSF:
+        found += civbsf_shaders(d, '/' + rel)
+        return rel, uniq_keys(found), var_pairs(found), trees
     if head[4:5] == b'\x78' and path.endswith('.gz') and (z := gust_gz(d)) is not None: d = z   # Gust's chunked zlib, before the shader prefilter
     if head[:4] != ZSTD_MAGIC and head[4:8] in (ZSTD_MAGIC, LZ4_FRAME_MAGIC): d = unsized(d, '/' + rel)   # a size-prefixed frame (unsized): Kirby and the Forgotten Land keeps its BNSH in 7,201 .cmp files; read raw, the split found 121 of its 27,297 shaders
     if d[:4] == b'Yaz0': d = yaz0(d)
