@@ -57,12 +57,14 @@ AAssetManager *dm_front_assets(void) { return g_act ? g_act->assetManager : NULL
 static pthread_mutex_t g_win_mu = PTHREAD_MUTEX_INITIALIZER;
 static ANativeWindow *g_win, *g_external_win;
 static _Atomic int g_external_active;
+static _Atomic int g_car_pad_w, g_car_pad_h, g_car_pad_dpi;
 static _Atomic unsigned g_external_epoch;
 static _Atomic uint64_t g_ext_buttons, g_ext_presses;
 static _Atomic int g_ext_lx, g_ext_ly, g_ext_rx, g_ext_ry, g_ext_menu;
 ANativeWindow *dm_front_window(void) { pthread_mutex_lock(&g_win_mu); ANativeWindow *w = g_external_win ? g_external_win : g_win; pthread_mutex_unlock(&g_win_mu); return w; }
 static ANativeWindow *phone_window(void) { pthread_mutex_lock(&g_win_mu); ANativeWindow *w = g_win; pthread_mutex_unlock(&g_win_mu); return w; }
-int dm_external_active(void) { return atomic_load(&g_external_active); }
+int dm_external_active(void) { return atomic_load(&g_external_active) || atomic_load(&g_car_pad_w) > 0; }
+void dm_overlay_redraw(void);
 static void assignment_clear_phone(void);
 __attribute__((weak)) void vk_window_lost(void) {}   // the backend lets go of the window's swapchain before the window goes
 static void on_window_created(ANativeActivity *a, ANativeWindow *w) { (void)a; pthread_mutex_lock(&g_win_mu); g_win = w; pthread_mutex_unlock(&g_win_mu); }
@@ -75,6 +77,20 @@ JNIEXPORT void JNICALL Java_org_nx2a_ExternalActivity_externalSurface(JNIEnv *en
     if (old) ANativeWindow_release(old);
     if (!next) { atomic_store(&g_ext_buttons, 0); atomic_store(&g_ext_presses, 0); atomic_store(&g_ext_menu, 0); dm_input_set(0, 0, 0, 0, 0); assignment_clear_phone(); }
 }
+
+JNIEXPORT void JNICALL Java_org_nx2a_ExternalActivity_externalCarPad(JNIEnv *env, jclass cls, jint width, jint height, jint dpi) {
+    (void)env; (void)cls;
+    if (width <= 0 || height <= 0) { width = 0; height = 0; dpi = 0; }
+    if (dpi < 0 || dpi >= 0xfffe) dpi = 0;
+    if (atomic_load(&g_car_pad_w) == width && atomic_load(&g_car_pad_h) == height && atomic_load(&g_car_pad_dpi) == dpi) return;
+    atomic_store(&g_car_pad_dpi, dpi);
+    atomic_store(&g_car_pad_h, height);
+    atomic_store(&g_car_pad_w, width);
+    atomic_fetch_add(&g_external_epoch, 1);
+    if (!width) { atomic_store(&g_ext_buttons, 0); atomic_store(&g_ext_presses, 0); atomic_store(&g_ext_menu, 0); dm_input_set(0, 0, 0, 0, 0); assignment_clear_phone(); }
+    dm_overlay_redraw();
+}
+
 
 void dm_focus_set(int st); void dm_audio_suspend(int on); void guest_clock_freeze_for(int reason, int on); void dm_gfx_suspend(int on);
 // ---- settings (the pause menu's), kept in the files folder as KEY=VALUE lines ----
@@ -571,7 +587,7 @@ int dm_overlay_visible(void) {
 }
 int dm_overlay_layout(void) {   // the phone's layout in a window at least OV_PHONE_ASPECT wide for its height (overlay_layout.h)
     static int last_w = -1, last_h = -1, phone;
-    ANativeWindow *w = phone_window(); int ww = w ? ANativeWindow_getWidth(w) : 0, wh = w ? ANativeWindow_getHeight(w) : 0;
+    ANativeWindow *w = phone_window(); int ww = atomic_load(&g_car_pad_w), wh = atomic_load(&g_car_pad_h); if (!ww || !wh) { ww = w ? ANativeWindow_getWidth(w) : 0; wh = w ? ANativeWindow_getHeight(w) : 0; }
     if (ww != last_w || wh != last_h) { last_w = ww; last_h = wh; phone = ov_layout_for_size(ww, wh);
         if (wh > 0) LOG("[overlay] window %dx%d: the %s layout", ww, wh, phone ? "phone" : "tablet"); }
     return phone;
@@ -600,12 +616,13 @@ int64_t dm_overlay_pressed(int ctl, uint64_t bit) {
 }
 static int g_dpi;   // the display's density (AConfiguration), 0 = unknown
 float dm_overlay_scale(void) {
-    static int last_w = -1, last_h = -1; static float s = 1;
-    ANativeWindow *w = phone_window(); int ww = w ? ANativeWindow_getWidth(w) : 0, h = w ? ANativeWindow_getHeight(w) : 0;
-    if (h != last_h || ww != last_w) { last_w = ww; last_h = h; s = 1;   // (the width picks the layout, whose buttons are sized for its form factor)
+    static int last_w = -1, last_h = -1, last_dpi = -1; static float s = 1;
+    ANativeWindow *w = phone_window(); int ww = atomic_load(&g_car_pad_w), h = atomic_load(&g_car_pad_h); if (!ww || !h) { ww = w ? ANativeWindow_getWidth(w) : 0; h = w ? ANativeWindow_getHeight(w) : 0; }
+    int dpi = atomic_load(&g_car_pad_w) ? atomic_load(&g_car_pad_dpi) : dpi;
+    if (h != last_h || ww != last_w || dpi != last_dpi) { last_w = ww; last_h = h; last_dpi = dpi; s = 1;   // (the width picks the layout, whose buttons are sized for its form factor)
         float face = 0.1f; const ov_ctl *L = OV_CTLS; for (int i = 0; i < OV_N; i++) if (L[i].kind == OV_BUTTON && L[i].btn == DM_BTN_A) face = L[i].w;   // A's width, in window heights
-        if (h > 0 && g_dpi > 0 && g_dpi < 0xfffe) { float mm = face * (float)h / (float)g_dpi * 25.4f; s = OV_MIN_MM / mm; if (s < 1) s = 1; if (s > 1.45f) s = 1.45f; s = ov_fit_scale(OV_CTLS, (float)ww, (float)h, s); }   // (no further than the controls fit the window)
-        LOG("[overlay] window %dx%d, density %d dpi: face buttons %.1f mm, controls x%.2f", ww, h, g_dpi, h > 0 && g_dpi > 0 && g_dpi < 0xfffe ? face * h / g_dpi * 25.4f : 0, s); }
+        if (h > 0 && dpi > 0 && dpi < 0xfffe) { float mm = face * (float)h / (float)dpi * 25.4f; s = OV_MIN_MM / mm; if (s < 1) s = 1; if (s > 1.45f) s = 1.45f; s = ov_fit_scale(OV_CTLS, (float)ww, (float)h, s); }   // (no further than the controls fit the window)
+        LOG("[overlay] window %dx%d, density %d dpi: face buttons %.1f mm, controls x%.2f", ww, h, dpi, h > 0 && dpi > 0 && dpi < 0xfffe ? face * h / dpi * 25.4f : 0, s); }
     return s;
 }
 void dm_overlay_knob(int stick, float *dx, float *dy) { *dx = atomic_load(&g_knob[stick][0]) / 10000.0f; *dy = atomic_load(&g_knob[stick][1]) / 10000.0f; }
@@ -1223,7 +1240,7 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
 
 __attribute__((weak)) void dm_picture_rect(float r[4]);   // gfx_vk_present.c
 static void touch_event(AInputEvent *e) {
-    ANativeWindow *w = phone_window(); float W = w ? (float)ANativeWindow_getWidth(w) : 1, H = w ? (float)ANativeWindow_getHeight(w) : 1;
+    ANativeWindow *w = phone_window(); float W = atomic_load(&g_car_pad_w), H = atomic_load(&g_car_pad_h); if (W <= 0 || H <= 0) { W = w ? (float)ANativeWindow_getWidth(w) : 1; H = w ? (float)ANativeWindow_getHeight(w) : 1; }
     if (atomic_load(&g_tx_on)) { tx_touch(e, W, H); return; }   // the text entry's keys
     if (atomic_load(&g_menu)) { if (atomic_load(&g_edit)) ed_touch(e, W, H); else if (atomic_load(&g_sp_on)) sp_touch(e, W, H); else menu_touch(e, W, H); return; }
     int act = AMotionEvent_getAction(e) & AMOTION_EVENT_ACTION_MASK, ai = AMotionEvent_getAction(e) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;

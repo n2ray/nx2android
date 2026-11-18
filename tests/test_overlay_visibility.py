@@ -50,6 +50,7 @@ static int assignment_device(int id) { (void)id; return 0; }
 static int assignment_attach(int id, const char *key) { (void)id; (void)key; return 0; }
 static void menu_java(void *method) { (void)method; }
 static void *g_assignment_menu_method, *g_audio_menu_method;
+static _Atomic int g_car_pad_w, g_car_pad_h;
 static _Atomic int g_set_overlay, g_overlay, g_pads, g_edit, g_menu_btn = 1;
 static _Atomic int g_cust[2][2][OV_N][4];
 static _Atomic int g_set_rumble, g_set_fps, g_set_labels, g_menu_tab, g_sv_st;

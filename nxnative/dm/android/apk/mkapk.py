@@ -14,12 +14,14 @@ _p.add_argument('--icon-bg', help='the adaptive icon\'s background layer (a PNG,
 _p.add_argument('--asset', action='append', default=[], metavar='NAME=FILE', help='a file the app reads with AAssetManager as NAME (assets/NAME in the APK): the gamepad theme')
 _p.add_argument('--dex', help='optional classes.dex for a custom NativeActivity')
 _p.add_argument('--activity', default='android.app.NativeActivity', help='NativeActivity class name')
+_p.add_argument('--android-auto', action='store_true', help='enable the parked car launcher and phone controller')
 _p.add_argument('--release', action='store_true', help='not debuggable')
 _p.add_argument('--game-mode-performance', action='store_true', help='declare Performance Game Mode (requires the native NVN pacing policy)')
 _p.add_argument('--version-code', type=int, default=1, help='versionCode: a later port of the game must have a higher one to install over it')
 _p.add_argument('--version-name', default='1.0', help='versionName: the version the player sees (the game\'s display version)'); ARGS = _p.parse_args()
 PKG, LIB, LABEL = ARGS.package, ARGS.lib, ARGS.label
 if ARGS.activity != 'android.app.NativeActivity' and not ARGS.dex: _p.error('--activity requires --dex')
+if ARGS.android_auto and ARGS.activity not in ('org.nx2a.ExternalActivity', 'org.nx2a.KeyboardExternalActivity'): _p.error('--android-auto requires an external display activity')
 if bool(ARGS.icon_fg) != bool(ARGS.icon_bg) or (ARGS.icon_fg and not ARGS.icon): _p.error('--icon-fg and --icon-bg go together, with --icon')
 MIN_SDK, TARGET_SDK = 29, 36
 ANDROID_NS = 'http://schemas.android.com/apk/res/android'
@@ -75,6 +77,14 @@ MANIFEST = ('manifest', [(False, 'package', PKG), (True, 'versionCode', ARGS.ver
             ('intent-filter', [], [
                 ('action', [(True, 'name', 'android.intent.action.MAIN')], []),
                 ('category', [(True, 'name', 'android.intent.category.LAUNCHER')], [])])])])])
+
+if ARGS.android_auto:
+    app = next(node for node in MANIFEST[2] if node[0] == 'application')
+    activity = next(node for node in app[2] if node[0] == 'activity')
+    intent = next(node for node in activity[2] if node[0] == 'intent-filter')
+    intent[2].append(('category', [(True, 'name', 'android.intent.category.CAR_LAUNCHER')], []))
+    app[2].append(('activity', [(True, 'name', 'org.nx2a.CarPadActivity'), (True, 'exported', False),
+        (True, 'configChanges', ('hex', CONFIG_CHANGES)), (True, 'screenOrientation', 6)], []))
 
 def axml(root):
     # string pool: attribute names that carry resource IDs come first, in resource-map order

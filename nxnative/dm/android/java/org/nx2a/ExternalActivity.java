@@ -3,6 +3,9 @@ package org.nx2a;
 import android.app.NativeActivity;
 import android.app.Dialog;
 import android.app.AlertDialog;
+import android.app.Activity;
+import android.app.ActivityOptions;
+import android.content.Intent;
 import android.content.Context;
 import android.os.Bundle;
 import android.graphics.Canvas;
@@ -25,8 +28,13 @@ import android.media.AudioDeviceCallback;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.BatteryManager;
+import android.os.SystemClock;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.view.Gravity;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -44,8 +52,8 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
     private static native int externalAudioSelected();
     private static native void externalHaptic();
     private static native boolean externalTouch(MotionEvent event);
-    private static native boolean externalControllerKey(KeyEvent event);
-    private static native boolean externalControllerMotion(MotionEvent event);
+    static native boolean externalControllerKey(KeyEvent event);
+    static native boolean externalControllerMotion(MotionEvent event);
     private static native float[] externalOverlay(int width, int height);
     private static native int externalMenuState();
     private static native int[] externalMenuPixels(int width, int height, int state);
@@ -55,6 +63,10 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
     private static native int[] assignmentSnapshot();
     private static native void assignmentPreview(int id, float x, float y);
     private static native void assignmentPreviewButton(int id, boolean down);
+    private static native void externalCarPad(int width, int height, int densityDpi);
+    private static ExternalActivity carOwner;
+    private boolean car, carStarted, phonePadStopped;
+    private Button reconnect;
     private ExternalDisplay external;
     private View pad;
     private Dialog phonePad;
@@ -63,7 +75,29 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
     private final ExecutorService audioExecutor = Executors.newSingleThreadExecutor();
 
     @Override protected void onCreate(Bundle state) {
+        android.view.Display startDisplay = android.os.Build.VERSION.SDK_INT >= 30 ? getDisplay() : getWindowManager().getDefaultDisplay();
+        car = startDisplay != null && CarDisplay.isOwnCarDisplay(startDisplay.getName(), getPackageName());
+        if (car) {
+            try {
+                String flags = CarDisplay.sysmemFlags(android.system.Os.getenv("TU_DEBUG"));
+                android.system.Os.setenv("TU_DEBUG", flags, true);
+                android.util.Log.i("nx2a-dual", "Android Auto: Turnip flags before native startup: " + flags);
+            } catch (android.system.ErrnoException e) { android.util.Log.w("nx2a-dual", "cannot request car sysmem", e); }
+        }
         super.onCreate(state);
+        if (car) {
+            carOwner = this;
+            reconnect = new Button(this);
+            reconnect.setText(getResources().getConfiguration().locale.getLanguage().equals("zh") ? "\u624b\u673a\u624b\u67c4" : "Phone controller");
+            reconnect.setOnClickListener(v -> { phonePadStopped = false; openCarPad(); });
+            reconnect.setVisibility(View.GONE);
+            addContentView(reconnect, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.RIGHT));
+            return;
+        }
+        setupPhoneDisplay();
+    }
+    private void setupPhoneDisplay() {
+        if (external != null) return;
         if (android.os.Build.VERSION.SDK_INT >= 31) {
             try { pad = new OriginalPad(); } catch (IOException e) { android.util.Log.w("nx2a-dual", "original overlay unavailable", e); }
         }
@@ -88,6 +122,7 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
         external.start();
     }
     @Override protected void onDestroy() {
+        if (carOwner == this) { carOwner = null; CarPadActivity.close(); externalCarPad(0, 0, 0); }
         if (external != null) external.stop();
         if (phonePad != null) phonePad.dismiss();
         if (audioDialog != null) audioDialog.dismiss();
@@ -98,6 +133,33 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
     @Override protected void onPause() {
         releasePad();
         super.onPause();
+    }
+    @Override protected void onStart() {
+        super.onStart();
+        carStarted = car;
+    }
+    @Override protected void onResume() {
+        super.onResume();
+        if (!car) return;
+        android.view.Display current = android.os.Build.VERSION.SDK_INT >= 30 ? getDisplay() : getWindowManager().getDefaultDisplay();
+        if (current != null && current.getDisplayId() == android.view.Display.DEFAULT_DISPLAY) {
+            car = false; carStarted = false; carOwner = null; CarPadActivity.close(); externalCarPad(0, 0, 0); setupPhoneDisplay();
+            return;
+        }
+        getWindow().getDecorView().post(() -> { if (!phonePadStopped) openCarPad(); });
+    }
+    private void openCarPad() {
+        android.view.Display d = android.os.Build.VERSION.SDK_INT >= 30 ? getDisplay() : getWindowManager().getDefaultDisplay();
+        if (!carStarted || carOwner != this || d == null || !CarDisplay.isOwnCarDisplay(d.getName(), getPackageName()) || CarPadActivity.isOpen()) return;
+        if (reconnect != null) reconnect.setVisibility(View.VISIBLE);
+        CarPadActivity.close();
+        Intent intent = new Intent(this, CarPadActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+        try { startActivity(intent, ActivityOptions.makeBasic().setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY).toBundle()); }
+        catch (RuntimeException e) { android.util.Log.w("nx2a-dual", "phone controller unavailable", e); }
+    }
+    @Override protected void onStop() {
+        if (car) { carStarted = false; CarPadActivity.close(); externalCarPad(0, 0, 0); }
+        super.onStop();
     }
     @Override public void surfaceChanged(Surface surface, int width, int height) {
         externalSurface(surface);
@@ -117,6 +179,21 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
         if (pad instanceof Pad) ((Pad)pad).release();
         else if (pad instanceof OriginalPad) ((OriginalPad)pad).release();
     }
+
+    static View createCarPad(Activity phone) {
+        ExternalActivity owner = carOwner;
+        if (owner == null) return null;
+        try { return owner.new OriginalPad(phone); }
+        catch (IOException e) { android.util.Log.w("nx2a-dual", "original overlay unavailable", e); return null; }
+    }
+    static void carPadSize(int w, int h, int dpi) { if (carOwner != null) externalCarPad(w, h, dpi); }
+    static void carPadVisible(boolean visible) {
+        ExternalActivity owner = carOwner;
+        if (owner == null || !owner.carStarted) return;
+        if (!visible) owner.phonePadStopped = true;
+        if (owner.reconnect != null) owner.reconnect.setVisibility(visible ? View.GONE : View.VISIBLE);
+    }
+    static void releaseCarPad(View view) { if (view instanceof ExternalActivity.OriginalPad) ((OriginalPad)view).release(); }
 
     public void openAudioMenu() { runOnUiThread(this::showAudioMenu); }
     public void openControllerAssignment() { runOnUiThread(this::showControllerAssignment); }
@@ -169,6 +246,7 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
         assignmentDialog = dialog; dialog.show();
     }
     private void showAudioMenu() {
+        if (car) { new AlertDialog.Builder(this).setMessage("Audio follows Android Auto").setPositiveButton("OK", null).show(); return; }
         AudioManager manager = (AudioManager)getSystemService(Context.AUDIO_SERVICE);
         if (manager == null) return;
         if (audioDialog != null && audioDialog.isShowing()) return;
@@ -213,11 +291,17 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
         private final OverlayTheme[] themes = new OverlayTheme[2];
         private final Bitmap[] atlases = new Bitmap[2];
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint statusPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final boolean carController;
+        private String statusText = "";
+        private long statusAt;
         private int menuState = -1, rasterState = -2, rasterWidth, rasterHeight;
         private Bitmap menuRaster;
 
-        OriginalPad() throws IOException {
-            super(ExternalActivity.this);
+        OriginalPad() throws IOException { this(ExternalActivity.this); }
+        OriginalPad(Context context) throws IOException {
+            super(context);
+            carController = context instanceof CarPadActivity;
             for (int i = 0; i < 2; i++) {
                 try (InputStreamReader in = new InputStreamReader(getAssets().open("overlay/theme.tsv"), "UTF-8")) {
                     themes[i] = OverlayTheme.read(in, i == 0 ? "tablet" : "phone");
@@ -230,6 +314,24 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
         }
 
         private int control(String name) { for (int i = 0; i < names.length; i++) if (names[i].equals(name)) return i; return -1; }
+        private void drawCarStatus(Canvas canvas, float[] data) {
+            if (!carController) return;
+            long now = SystemClock.uptimeMillis();
+            if (statusText.isEmpty() || now - statusAt >= 15000) {
+                statusAt = now;
+                BatteryManager battery = (BatteryManager)getContext().getSystemService(Context.BATTERY_SERVICE);
+                int pct = battery == null ? -1 : battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+                String level = pct >= 0 && pct <= 100 ? pct + "%" : "--%";
+                statusText = android.text.format.DateFormat.getTimeFormat(getContext()).format(new java.util.Date()) + "  " + level + (battery != null && battery.isCharging() ? " ⚡" : "");
+            }
+            statusPaint.setTextSize(Math.max(12, getHeight() * .026f));
+            statusPaint.setTextAlign(Paint.Align.LEFT);
+            float padding = getHeight() * .012f, width = statusPaint.measureText(statusText) + padding * 2, height = statusPaint.getTextSize() * 1.5f;
+            float[] box = CarStatusLayout.place(data, names.length, getWidth(), getHeight(), width, height);
+            if (box == null) return;
+            statusPaint.setColor(Color.argb(180, 40, 43, 48)); canvas.drawRoundRect(box[0], box[1], box[0] + width, box[1] + height, height / 2, height / 2, statusPaint);
+            statusPaint.setColor(Color.WHITE); canvas.drawText(statusText, box[0] + padding, box[1] + (height - statusPaint.ascent() - statusPaint.descent()) / 2, statusPaint);
+        }
         private int direction(String name) { return name.equals("right") ? 0 : name.equals("left") ? 1 : name.equals("down") ? 2 : name.equals("up") ? 3 : -1; }
         private void sprite(Canvas canvas, OverlayTheme theme, Bitmap atlas, OverlayTheme.Sprite s, float[] data, int ctl, float dx, float dy) {
             int base = 4 + ctl * 9;
@@ -265,6 +367,7 @@ public class ExternalActivity extends NativeActivity implements ExternalDisplay.
                 sprite(canvas, theme, atlas, s, data, ctl, dx, dy);
             }
             if (edit) drawEditor(canvas, data, menu);
+            else if (menu < 0) drawCarStatus(canvas, data);
             postInvalidateDelayed(33);
         }
         private Bitmap menuRaster(int state) {
