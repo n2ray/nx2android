@@ -189,6 +189,11 @@ void vk_init(void) {
     if (V.qf == qn) die("[vk] no graphics + compute queue");
     uint32_t ne = 0; vkEnumerateDeviceExtensionProperties(V.pd, NULL, &ne, NULL);
     VkExtensionProperties *ex = calloc(ne, sizeof *ex); vkEnumerateDeviceExtensionProperties(V.pd, NULL, &ne, ex);
+    VkPhysicalDeviceMultisampledRenderToSingleSampledFeaturesEXT fm = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_FEATURES_EXT};
+    if (has_ext(ex, ne, "VK_EXT_multisampled_render_to_single_sampled")) {
+        VkPhysicalDeviceFeatures2 fq = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &fm};
+        vkGetPhysicalDeviceFeatures2(V.pd, &fq);
+    }
     const char *want[] = {"VK_KHR_swapchain", "VK_ANDROID_external_memory_android_hardware_buffer", "VK_EXT_queue_family_foreign", "VK_EXT_custom_border_color",
                           "VK_EXT_robustness2", "VK_EXT_depth_clip_control", "VK_EXT_provoking_vertex", "VK_EXT_index_type_uint8", "VK_EXT_transform_feedback",
                           "VK_GOOGLE_display_timing"};
@@ -246,6 +251,8 @@ void vk_init(void) {
     if (!V.has_timeline) VKLOG("no timeline semaphores (Vulkan 1.2 or VK_KHR_timeline_semaphore): submissions signal fences");
     // dynamic rendering is 1.3 or its extension with the feature on; a loaded pointer does not tell, since the loader hands out a trampoline for core functions the driver lacks
     V.has_dynrender = v13 ? f13.dynamicRendering : featx(xf, nxf, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES)[0];
+    { const char *e = getenv("DM_VK_MSRTSS"); V.has_msrtss = e && atoi(e) && V.has_dynrender && fm.multisampledRenderToSingleSampled && non < 64;
+      if (V.has_msrtss) on[non++] = "VK_EXT_multisampled_render_to_single_sampled"; }
     // imageless framebuffers need render pass 2 (gfx_vk_exec.c rp_get): core in 1.2, else its extension
     V.has_draw_count = v12 ? f12.drawIndirectCount : is_on(on, non, "VK_KHR_draw_indirect_count");
     V.has_imageless = v12 ? f12.imagelessFramebuffer : featx(xf, nxf, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES)[0] && is_on(on, non, "VK_KHR_create_renderpass2");
@@ -322,6 +329,7 @@ void vk_init(void) {
     VkBaseOutStructure *t = ff.pNext; while (t->pNext) t = t->pNext;   // the queried chain (core / promoted features), then the extensions'
     fdv.pNext = V.has_xfb ? (void *)&fxf : (void *)&fu8;
     t->pNext = V.has_divisor ? (VkBaseOutStructure *)&fdv : V.has_xfb ? (VkBaseOutStructure *)&fxf : (VkBaseOutStructure *)&fu8;
+    if (V.has_msrtss) { fm.pNext = ff.pNext; ff.pNext = &fm; }
     VkPhysicalDeviceFeatures2 enf = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, ff.pNext, en};
     float prio = 1;
     VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, NULL, 0, V.qf, 1, &prio};
@@ -1471,13 +1479,44 @@ void vk_img_barrier_all(VkCommandBuffer cb) {
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &b, 0, NULL, 0, NULL);
 }
 void vk_gpu_wrote(uint64_t a, uint64_t n);
+typedef struct { VkBuffer src, dst; VkBufferCopy region; } cross_copy_t;
+// Preflight the entire range before recording anything: the two pool boundaries need not coincide.
+static cross_copy_t *cross_copy_plan(uint64_t src, uint64_t dst, uint64_t n, size_t *count) {
+    *count = 0;
+    if (!n || src > UINT64_MAX - n || dst > UINT64_MAX - n || (src < dst + n && dst < src + n)) return NULL;
+    vkpool_t *sp = vk_pool_of(src, 1), *dp = vk_pool_of(dst, 1);
+    if (!sp || !dp || n > sp->end - src || n > dp->end - dst) return NULL;
+    uint64_t sb = sp->base, se = sp->end, db = dp->base, de = dp->end;
+    cross_copy_t *parts = NULL; size_t cap = 0;
+    while (n) {
+        sp = vk_pool_of(src, 1); dp = vk_pool_of(dst, 1);
+        if (!sp || !dp || sp->base != sb || sp->end != se || dp->base != db || dp->end != de || sp->hi <= src || dp->hi <= dst) goto fail;
+        uint64_t len = sp->hi - src; if (len > dp->hi - dst) len = dp->hi - dst; if (len > n) len = n;
+        if (*count == cap) { size_t next = cap ? cap * 2 : 4; if (next < cap || next > SIZE_MAX / sizeof *parts) goto fail;
+            cross_copy_t *p = realloc(parts, next * sizeof *parts); if (!p) goto fail; parts = p; cap = next; }
+        parts[(*count)++] = (cross_copy_t){sp->buf, dp->buf, {sp->boff + src - sp->lo, dp->boff + dst - dp->lo, len}};
+        src += len; dst += len; n -= len;
+    }
+    return parts;
+fail:
+    free(parts); *count = 0; return NULL;
+}
 void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {
     VkBuffer sb, db; VkDeviceSize so, dof;
     if (!n) return;
-    if (!vk_buf_at(src, n, &sb, &so) || !vk_buf_at(dst, n, &db, &dof)) { VKRED_ONCE(1, "buffer copy outside the memory pools (%#llx → %#llx, %llu bytes)", (unsigned long long)src, (unsigned long long)dst, (unsigned long long)n); return; }
+    size_t count = 0; cross_copy_t *parts = NULL;
+    vkpool_t *sp = vk_pool_of(src, 1), *dp = vk_pool_of(dst, 1);
+    if (sp && dp && n <= sp->hi - src && n <= dp->hi - dst) {
+        sb = sp->buf; so = sp->boff + src - sp->lo; db = dp->buf; dof = dp->boff + dst - dp->lo;
+    } else {
+        parts = cross_copy_plan(src, dst, n, &count);
+        if (!parts) { VKRED_ONCE(1, "buffer copy outside the memory pools (%#llx → %#llx, %llu bytes)", (unsigned long long)src, (unsigned long long)dst, (unsigned long long)n); return; }
+        static int said; if (!said++) VKLOG("buffer copy across pool chunks: %zu segments", count);
+    }
     vk_end_pass_land();
     VkCommandBuffer cb = vk_cmd(); vk_img_barrier_all(cb);
-    VkBufferCopy r = {so, dof, n}; vkCmdCopyBuffer(cb, sb, db, 1, &r);
+    if (parts) { for (size_t i = 0; i < count; i++) vkCmdCopyBuffer(cb, parts[i].src, parts[i].dst, 1, &parts[i].region); free(parts); }
+    else { VkBufferCopy r = {so, dof, n}; vkCmdCopyBuffer(cb, sb, db, 1, &r); }
     vk_img_barrier_all(cb); vk_gpu_wrote(dst, n);
 }
 void mtl_sub_fill(uint64_t dst, uint64_t n, uint32_t value) {

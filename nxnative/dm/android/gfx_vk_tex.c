@@ -263,8 +263,17 @@ static vkimg_t *img_new(const tex_t *t, const vkfmt_t *f) {
             fli.viewFormatCount = nfl; }
         ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_EXTENDED_USAGE_BIT; if (nfl == 1) ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
     }
+    if (V.has_msrtss && im->samples == 1 && ci.imageType == VK_IMAGE_TYPE_2D && !f->compressed && (ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {
+        VkImageFormatProperties props;
+        VkImageCreateFlags flags = ci.flags | VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
+        if (vkGetPhysicalDeviceImageFormatProperties(V.pd, ci.format, ci.imageType, ci.tiling, ci.usage, flags, &props) == VK_SUCCESS && (props.sampleCounts & VK_SAMPLE_COUNT_4_BIT)) ci.flags = flags;
+    }
     im->usage = ci.usage; im->cflags = ci.flags;
     VkResult r = vkCreateImage(V.dev, &ci, NULL, &im->img);
+    if (r && (ci.flags & VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT)) {
+        ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT; im->cflags = ci.flags;
+        r = vkCreateImage(V.dev, &ci, NULL, &im->img);
+    }
     if (r && f->compressed && (ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {   // the driver refused the attachment usage on a compressed image: as before, without it
         VKRED_ONCE(96, "compressed image format %#x refused colour-attachment usage (%d): created without it", d->format, r);
         ci.usage &= ~(VkImageUsageFlags)VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; im->usage = ci.usage; r = vkCreateImage(V.dev, &ci, NULL, &im->img); }
@@ -722,6 +731,8 @@ VkImageView vk_tex_view_as(const tex_t *t, const view_t *vw, int dim, int arraye
                                dim == 2 ? VK_IMAGE_VIEW_TYPE_3D : dim == 3 ? (arrayed ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE) : type;
         if (want == VK_IMAGE_VIEW_TYPE_2D && type == VK_IMAGE_VIEW_TYPE_2D_ARRAY) nly = 1;
         if (want == VK_IMAGE_VIEW_TYPE_CUBE || want == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
+            // A cube view requesting one cube can use the six faces of its native cube texture.
+            if (want == VK_IMAGE_VIEW_TYPE_CUBE && t->d.target == 8 && ly0 == 0 && nly == 1 && nlay == 6) nly = 6;
             // Returning a 2D view for a cube shader bypassed tex_desc_for's typed dummy. The saved creation flag also requires a square,
             // single-sample 2D image; having six layers alone is insufficient. Check the selected range before either view cache can keep a wrong type.
             if (!(im->cflags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) || nly < 6 || (want == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY && nly % 6)) {

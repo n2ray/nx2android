@@ -43,7 +43,12 @@ static void capture_red(const char *fmt, ...) {
         code += between(header, 'typedef struct vkimg vkimg_t;', 'vkimg_t *vk_tex(')
         code += between(header, 'typedef struct __attribute__((packed)) { uint8_t kind, desc, dim, flags;', '_Static_assert(sizeof(dmsv_bind)')
         code += r'''
-static struct { VkDevice dev; VkPhysicalDevice pd; } V;
+static struct { VkDevice dev; VkPhysicalDevice pd; int has_msrtss; } V;
+static int supports_four = 1;
+static VkResult vkGetPhysicalDeviceImageFormatProperties(VkPhysicalDevice p, VkFormat f, VkImageType t, VkImageTiling tiling, VkImageUsageFlags usage, VkImageCreateFlags flags, VkImageFormatProperties *out) {
+    (void)p; (void)f; (void)t; (void)tiling; (void)usage; (void)flags;
+    memset(out, 0, sizeof *out); out->sampleCounts = VK_SAMPLE_COUNT_1_BIT | (supports_four ? VK_SAMPLE_COUNT_4_BIT : 0); return VK_SUCCESS;
+}
 static uint64_t g_wseq, g_tex_gen=1, g_set_epoch=1, g_x_logfs;
 static int g_var_now, g_tracing;
 static struct { struct { uint64_t key; } *sh[2]; } S;
@@ -125,6 +130,9 @@ static void accepted(int arr, unsigned base, unsigned count) {
 }
 int main(int argc, char **argv) {
     (void)argv;
+    V.has_msrtss=1; reset(1,16,16,1,1); assert(image.cflags & VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT);
+    supports_four=0; reset(1,16,16,1,1); assert(!(image.cflags & VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT));
+    supports_four=1; V.has_msrtss=0; reset(1,16,16,1,1); assert(!(image.cflags & VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT));
     if (argc>1) {
         reset(4,16,16,7,1); accepted(0,0,6);
         reset(4,16,16,8,1); has_subview=1; subview=(view_t){.set_layers=1,.min_layer=2,.nlayers=6}; accepted(0,2,6);
@@ -149,6 +157,7 @@ int main(int argc, char **argv) {
     reset(4,16,16,12,1); has_subview=1; subview=(view_t){.set_layers=1,.min_layer=12,.nlayers=6}; rejected(0);
     reset(4,16,16,12,1); has_subview=1; subview=(view_t){.set_layers=1,.min_layer=UINT16_MAX,.nlayers=UINT16_MAX}; rejected(1);
     reset(8,16,16,1,1); accepted(0,0,6);
+    reset(8,16,16,1,1); has_subview=1; subview=(view_t){.set_layers=1,.min_layer=0,.nlayers=1}; accepted(0,0,6);
     reset(9,16,16,12,1); accepted(1,0,12);
     reset(4,16,16,12,1); accepted(0,0,6);
     reset(4,16,16,12,1); accepted(1,0,12);
