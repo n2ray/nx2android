@@ -63,6 +63,7 @@ public final class ExternalDisplay implements DisplayManager.DisplayListener {
         dismiss();
         Presentation next = new Presentation(activity, selected);
         SurfaceView view = new SurfaceView(next.getContext());
+        view.getHolder().setFixedSize(1920, 1080);
         view.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override public void surfaceCreated(SurfaceHolder holder) { }
             @Override public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
