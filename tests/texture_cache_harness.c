@@ -46,6 +46,8 @@ static void pkg_upload(vkimg_t *im,const tex_t *t,const vkfmt_t *f) {
     (void)f;uploads++;im->content=t->mem[0];im->pkg_seen=im->pkg_stamp=1;
     im->pkg_hash=pkg_hash(t->mem,t->L.size);im->pkg_mem=t->mem;im->pkg_span=t->mem;im->pkg_len=t->L.size;
 }
+static int nvn_sparse_pool(const void *p) { (void)p; return 0; }
+static uint64_t nvn_sparse_gen(void) { return 0; }
 static int nvn_sparse_since(const void *pool,uint64_t addr,size_t size,uint64_t gen,uint64_t stamp) {(void)pool;(void)addr;(void)size;(void)gen;(void)stamp;return 0;}
 static int nvn_dirty_since_span(const void *span,const void *mem,size_t size,uint64_t stamp) {(void)span;(void)mem;(void)size;(void)stamp;return 0;}
 static void nvn_dirty_protect(const void *mem,size_t size) {(void)mem;(void)size;}

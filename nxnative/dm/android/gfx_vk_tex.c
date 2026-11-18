@@ -434,7 +434,13 @@ static vkimg_t *vk_tex_(const tex_t *t) {
     // a texture's first use: written by the CPU since it was registered (profile tex_dirty_upload), it is CPU-written from now on, as at nvn_mtl.m's first resolution;
     // otherwise only a later nvn_ft_poll pass finds it, and its first draws read zeros
     int nvn_ft_written(const tex_t *);
-    if (t->mem && lin_copy(im, t, f)) {}
+    int sparse = t->mem && t->pool && nvn_sparse_pool(t->pool) && (t->d.flags & NVN_TEXTURE_FLAGS_SPARSE);
+    if (sparse) {
+        im->pkg_used = g_tex_frame;
+        uint64_t now = nvn_dirty_now(), gen = nvn_sparse_gen();
+        if (!im->packaged || ((now != im->pkg_seen || gen != im->pkg_vgen) && nvn_sparse_since(t->pool, (uint64_t)(uintptr_t)t->mem, t->L.size, im->pkg_vgen, im->pkg_stamp))) pkg_upload(im, t, f);
+        im->pkg_seen = now;
+    } else if (t->mem && lin_copy(im, t, f)) {}
     else if (t->mem && (packaged_tex(t) || (first && (nvn_ft_written(t) || cpu_content_tex(t, f))))) {
         im->pkg_used = g_tex_frame;
         if (!im->packaged) { im->packaged = 1; pkg_upload(im, t, f); }
