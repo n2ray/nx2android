@@ -22,6 +22,12 @@ assert "android.intent.category.CAR_LAUNCHER" in str(acts[0])
                                  '--activity', 'org.nx2a.ExternalActivity', '--android-auto'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_porter_option_is_opt_in(self):
+        from porter import cli, pipeline
+        self.assertTrue(cli._parser().parse_args(['port', 'x', '--android-auto']).android_auto)
+        self.assertFalse(cli._parser().parse_args(['port', 'x']).android_auto)
+        self.assertFalse(pipeline.Options(Path('.')).android_auto)
+
     def test_rejects_non_external_activity(self):
         result = subprocess.run([sys.executable, str(APK / 'mkapk.py'), 'host.so', 'app.apk', '--android-auto'],
                                 capture_output=True, text=True)
