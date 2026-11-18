@@ -144,6 +144,19 @@ for diagnosis. Likewise the first-use upload of CPU-filled uncompressed 2D textu
 `cpu_content_tex`, which also checks the pool for GPU-written aliases) needs `env DM_NVN_CPU_TEX2D_FIRST_USE=1`;
 without it only compressed and 3D textures are uploaded, as before.
 
+## Descriptor cache hashing
+
+The Android backend's descriptor caches find candidates by hash. Two kinds of path decide reuse differently:
+
+- **Exact.** The content-keyed set cache (`set_key`) and driver segments built and hashed (`drv_shared`'s content path) compare every byte of a candidate before reusing it, so a collision only costs a miss. Long inputs use a four-lane hash so the replay thread does not wait on one dependent multiply chain.
+- **Hash only.** Two paths reuse on a 64-bit hash alone, to avoid collecting or building anything:
+  - a stage set found again by its bindings (`rmemo_take`, keyed by order-free hashes of the stage's slots, the shader and its constant buffers' buffers);
+  - a c2 driver segment found by the hash of its slots (`drv_shared` with `DM_VK_C2_FAST`).
+
+  `DM_VK_X_SETVERIFY=1` collects one memo hit in 64 anyway, builds the c2 segment again instead of taking it by hash, and logs a `[RED]` line on any difference. `DM_VK_X_NOSETMEMO=1` and `DM_VK_C2_FAST=0` turn the two paths off for an A/B.
+
+These hashes stay in the process: they are not persisted and do not change the Vulkan pipeline-cache identity.
+
 ## Game profiles on Android
 
 A profile is offered for Android when it has an `android.tsv`; the profiles without one (52 of the 54 today, upstream's iOS games) show as "ios only": an experimental port can still try them. `android.tsv` holds, one `key<TAB>value` row each:
